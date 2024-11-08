@@ -1,7 +1,7 @@
 
 # Simulating the effects of AR windshield HUDs on driving performance using SUMO and CARLA
 
-![Software overview diagram](/screenshots/diagram.pdf)
+![Software overview diagram](/screenshots/diagram.png)
 
 ## Introduction
 ### Simulating the effects of AR windshield HUDs on driving performance using SUMO and CARLA
