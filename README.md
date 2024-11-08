@@ -1,7 +1,7 @@
 
 # Simulating the effects of AR windshield HUDs on driving performance using SUMO and CARLA
 
-![Software overview diagram](/screenshots/diagram.png)
+![Software overview diagram](/screenshots/diagram.pdf)
 
 ## Introduction
 ### Simulating the effects of AR windshield HUDs on driving performance using SUMO and CARLA
@@ -67,14 +67,14 @@ python randomTrips.py -n "CarlaBaseDir/Co-Simulation/Sumo/examples/net/TownXX.ne
 1. Run main.py to access the GUI ("python main.py")
 2. In the GUI, select which components u want to run.
     1. choose a map for the simulation from the list
-    2. select wether you want the co-simulation with CARLA, run the first-person spectator client and wether you want a vehicle without a HUD (a baseline vehicle). If you select the first-person spectator client without the CARLA option, a silent CARLA server will start in the background.
+    2. select whether you want the co-simulation with CARLA, run the first-person spectator client and whether you want a vehicle without a HUD (a baseline vehicle). If you select the first-person spectator client without the CARLA option, a silent CARLA server will start in the background.
     3. Add or remove HUD configurations until you have the desired number.
-    4. configure and adjust probability and name of all HUD configurations
-    * If you want to run the spectator client at a later point, make sure you selected the co-simulation with Carla option and run spectator.py
-3. click start Simulation. SUMO and other selected components will open for a visual simulation. Simultaniously TRaCI will run the simulation in the background and collect all data.
+    4. configure and adjust the probability and name of all HUD configurations
+    * If you want to run the spectator client at a later point, make sure you have selected the co-simulation with Carla option and run spectator.py
+3. click start Simulation. SUMO and other selected components will open for a visual simulation. Simultaneously TRaCI will run the simulation in the background and collect all data.
 4. The simulation results will be saved to the folder [Simulation_data](./Simulation_data)
 
-You can start the next simulation without having to restart the project. Just make sure to close all running SUMO and CARLA processes before starting a new simulation. Sometimes a CARLA thread doesn't close properly and idles in the background which causes problems when trying to start a new simulation. If you have issues starting a new simulation check the taskmanager and close all running CARLA threads.
+You can start the next simulation without having to restart the project. Just make sure to close all running SUMO and CARLA processes before starting a new simulation. Sometimes a CARLA thread doesn't close properly and idles in the background which causes problems when trying to start a new simulation. If you have issues starting a new simulation check the task manager and close all running CARLA threads.
 
 ![GUI with main tab](/screenshots/GUI_main.PNG)
 
@@ -87,7 +87,7 @@ You can start the next simulation without having to restart the project. Just ma
 ### Configurations
 
 After opening the GUI you can navigate to the settings tab. Here you can select which simulation data you would like to save in your .csv file.
-Note that by default all the data is selected. Everytime you restart the GUI you have the manually deselect options you don't want to save.
+Note that by default all the data is selected. Every time you restart the GUI you have the manually deselect options you don't want to save.
 
 These are the options:
 * map: the map that was being used for the simulation
@@ -99,7 +99,7 @@ These are the options:
 * position_y: y position of the vehicle
 * current_speed: current speed of the vehicle
 * current_gap: current gap of the vehicle to the leading vehicle
-* current_acceleration: current acceleration of the vehicle, negative values means the vehicle is braking
+* current_acceleration: current acceleration of the vehicle, negative values mean the vehicle is braking
 * distance_traveled: total distance the vehicle has traveled during the simulation
 * time_loss: total time the car is behind its schedule
 * maxSpeed: calculated maximal speed the car will drive
