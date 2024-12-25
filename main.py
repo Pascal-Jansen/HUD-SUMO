@@ -26,13 +26,13 @@ maps = {
     "Town05": "{}.sumocfg".format(os.path.join(sumo_base_dir, "examples", "Town05"))
 }
 
-# Mapping from descriptive brightness labels to numeric values in [0.1..1.0]
+# Mapping from descriptive brightness labels to numeric values in [0.0..0.9]
 brightness_mapping = {
-    "very dark":   0.1,
-    "dark":        0.3,
-    "average":     0.6,
-    "bright":      0.8,
-    "very bright": 1.0
+    "very dark":   0.0,
+    "dark":        0.2,
+    "average":     0.4,
+    "bright":      0.6,
+    "very bright": 0.9
 }
 
 # Mapping from descriptive FoV labels to numeric values in [30..100]
@@ -426,7 +426,7 @@ def hudSelection():
         HUDname = hud['HUDname']
 
         # Map the string brightness/fov to numeric
-        brightness_val = brightness_mapping.get(brightness_str, 0.6)
+        brightness_val = brightness_mapping.get(brightness_str, 0.4)
         fov_val = fov_mapping.get(fov_str, 60)
 
         # Now call calculations with numeric brightness, fov
@@ -691,7 +691,7 @@ def create_hud_frame(next_hud_id):
     brightness_menu.bind('<<ComboboxSelected>>', on_selection)
     brightness_tooltip = ToolTip(
         brightness_menu, 
-        "Very dark = numeric 0.1, ... Very bright = numeric 1.0."
+        "Very dark = numeric 0.0, ... Very bright = numeric 0.9."
     )
     brightness_question_button = tk.Button(frame, text="?", command=brightness_tooltip.show_tooltip, width=3)
     brightness_question_button.grid(row=2, column=2, padx=5)
@@ -941,7 +941,7 @@ canvas.configure(scrollregion=canvas.bbox("all"))
 # HELP PAGE
 help_tab = ttk.Frame(notebook)
 notebook.add(help_tab, text="Help")
-# ... (omitted here for brevity; you can keep your help content the same) ...
+# (Omitted content for brevity.)
 
 simulate_var = tk.BooleanVar()
 simulate_var.set(False)
