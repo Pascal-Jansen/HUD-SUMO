@@ -8,8 +8,12 @@ library(DataExplorer)
 
 main_df = NULL
 
+# Construct the file path
+file_path <- "../sample_data/Town01_21-23-53_2024-10-08_simulation_data.csv"
 
-main_df <- read_delim("Town01_21-23-53_2024-10-08_simulation_data.csv", delim = ",")
+# Read the CSV file
+main_df <- read_delim(file_path, delim = ",")
+
 main_df <- as.data.frame(main_df)
 names(main_df)
 
