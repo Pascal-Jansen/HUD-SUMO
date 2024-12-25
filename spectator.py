@@ -73,7 +73,7 @@ class CarlaCameraClient:
         self.show_icon_minus = False
         self.show_icon_placeholder = False
 
-        # Initially, HUD alpha = 1 means fully opaque
+        # Initially, HUD alpha = 1.0 means fully opaque
         self.hud_alpha = 1.0
         self.iconscale = (90, 90)
 
@@ -86,7 +86,7 @@ class CarlaCameraClient:
     def load_xml_config(self, xml_file):
         """
         Load the XML configuration file, expecting numeric 
-        brightness in [0.1..1.0] and FoV in [30..100] as text.
+        brightness in [0.0..0.9] and FoV in [30..100] as text.
         """
         config = {}
         if not os.path.isfile(xml_file):
@@ -105,14 +105,14 @@ class CarlaCameraClient:
                 relevance_elem   = vehicle.find('Relevance')
                 fov_elem         = vehicle.find('FoV')
 
-                # Convert brightness/FoV to float, defaulting to mid-range values
-                brightness_val = 0.6
+                # Convert brightness/FoV to float, defaulting to mid-range
+                brightness_val = 0.4  # Fallback if none
                 fov_val = 60.0
                 if brightness_elem is not None:
                     try:
                         brightness_val = float(brightness_elem.text)
                     except ValueError:
-                        print(f"[WARNING] Invalid brightness for {type_id}, using 0.6")
+                        print(f"[WARNING] Invalid brightness for {type_id}, using 0.4")
 
                 if fov_elem is not None:
                     try:
@@ -134,21 +134,20 @@ class CarlaCameraClient:
         if vehicle.type_id in self.hud_xml_config:
             config = self.hud_xml_config[vehicle.type_id]
             self.hudname      = config.get('HUDName', '')
-            brightness_val    = config.get('Brightness', 0.6)  # float in [0.1..1.0]
+            brightness_val    = config.get('Brightness', 0.4)  # float in [0.0..0.9]
             relevance         = config.get('Relevance', 'neutral')
             frequency         = config.get('Frequency', 'average')
-            fov_val           = config.get('FoV', 60.0)        # float in [30..100]
+            fov_val           = config.get('FoV', 60.0)  # float in [30..100]
             x = self.hud_area_start[0]
             y = self.hud_area_start[1]
 
-            # Convert brightness -> alpha so that brightness=0.1 => alpha=1.0, 
-            # brightness=1.0 => alpha=0.1 (scales the "HUD visibility")
-            alpha = 1.1 - brightness_val
-            # Keep alpha at least 0.1
+            # Convert brightness -> alpha 
+            # For example, brightness=0.0 => alpha=1.0 (fully visible)
+            # brightness=0.9 => alpha=0.1 (near-transparent)
+            alpha = 1.0 - brightness_val
             self.hud_alpha = max(0.1, alpha)
 
-            # Next, interpret numeric FoV to small/medium/large
-            # (You can define your own cutoffs)
+            # Interpret numeric FoV as small/medium/large
             if fov_val <= 45:
                 # small FoV
                 self.speed_hud_location = (x, y + 0.1)
@@ -202,7 +201,7 @@ class CarlaCameraClient:
                     (x - .2,  y + 0.5)
                 ]
 
-            # Show/hide icons depending on Relevance (strings)
+            # Show/hide icons depending on Relevance
             if relevance == "unimportant":
                 self.show_speed_text = True
                 self.show_icon_stopwatch = True
