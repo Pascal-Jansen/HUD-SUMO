@@ -1,5 +1,5 @@
 """
-Function that takes the information_relevance, information_frequency and fov (float in [30,100]) of the HUD settings 
+Function that takes the information_relevance, information_frequency and fov (float in [30,100]) 
 and the calculated distraction_level (calc_distraction) and fatigueness_level (calc_fatigueness) 
 and calculates the awareness_level.
 The return value is an int between 1 and 10.
@@ -30,7 +30,6 @@ def calc_awareness(information_relevance, information_frequency, distraction_lev
 
     # Continuous approach for FOV in [30, 100] degrees:
     # Normalize to [0, 1], then scale (e.g., up to 3)
-    # fov=30  -> 0.0, fov=100 -> 1.0
     normalized_fov = (fov - 30) / (100 - 30)  
     fov_effect = normalized_fov * 3 * weight_fov
 
@@ -38,10 +37,10 @@ def calc_awareness(information_relevance, information_frequency, distraction_lev
     fatigueness_effect = fatigueness_level * weight_fatigueness  
 
     total_effect = (
-        relevance_effect.get(information_relevance, 0) +
-        frequency_effect.get(information_frequency, 0) +
-        fov_effect +
-        (distraction_effect - fatigueness_effect)
+        relevance_effect.get(information_relevance, 0)
+        + frequency_effect.get(information_frequency, 0)
+        + fov_effect
+        + (distraction_effect - fatigueness_effect)
     )
 
     # Scale the overall effect. Adjust the divisor (3 here) if desired.
@@ -50,7 +49,7 @@ def calc_awareness(information_relevance, information_frequency, distraction_lev
 
 
 """
-Function that takes the information_relevance, information_frequency, brightness (float in [0.1,1]) 
+Function that takes the information_relevance, information_frequency, brightness (float in [0,0.9]) 
 and fov (float in [30,100]) of the HUD settings and calculates the distraction_level.
 The return value is an int between 1 and 10.
 
@@ -78,10 +77,10 @@ def calc_distraction(information_relevance, information_frequency, brightness, f
         "maximum": 3 * weight_frequency   
     }
 
-    # Continuous brightness in [0.1, 1] (treated like an alpha transparency value):
-    # First normalize to [0,1] (if desired) or treat brightness directly. Here, we’ll normalize:
-    # (brightness - 0.1)/(1 - 0.1) => [0..1], then scale up to 3
-    normalized_brightness = (brightness - 0.1) / (1.0 - 0.1)  # yields 0.0 (b=0.1) to 1.0 (b=1)
+    # Continuous brightness in [0, 0.9]:
+    # Normalize to [0,1] by dividing by 0.9, then scale up to 3
+    # brightness=0   -> 0.0, brightness=0.9 -> 1.0
+    normalized_brightness = brightness / 0.9  # yields 0..1
     brightness_effect = normalized_brightness * 3 * weight_brightness
 
     # Continuous FOV in [30, 100]
@@ -89,10 +88,10 @@ def calc_distraction(information_relevance, information_frequency, brightness, f
     fov_effect = normalized_fov * 3 * weight_fov
 
     total_effect = (
-        relevance_effect.get(information_relevance, 0) +
-        frequency_effect.get(information_frequency, 0) +
-        brightness_effect +
-        fov_effect
+        relevance_effect.get(information_relevance, 0)
+        + frequency_effect.get(information_frequency, 0)
+        + brightness_effect
+        + fov_effect
     )
     
     # Adjust the divisor or multiplier to suit your scale
@@ -101,7 +100,7 @@ def calc_distraction(information_relevance, information_frequency, brightness, f
 
 
 """
-Function that takes the information_relevance, information_frequency and brightness (float in [0.1,1]) 
+Function that takes the information_relevance, information_frequency and brightness (float in [0,0.9]) 
 of the HUD settings and calculates the fatigueness_level.
 The return value is an int between 1 and 10.
 
@@ -128,15 +127,15 @@ def calc_fatigueness(information_relevance, information_frequency, brightness):
         "maximum": 3 * weight_frequency  
     }
 
-    # Continuous brightness in [0.1, 1]
-    # Normalize (0.0 to 1.0), then scale up to 3
-    normalized_brightness = (brightness - 0.1) / (1.0 - 0.1)
+    # Continuous brightness in [0, 0.9]
+    # Normalize to [0..1], then scale by 3
+    normalized_brightness = brightness / 0.9  # 0..1
     brightness_effect = normalized_brightness * 3 * weight_brightness
 
     total_effect = (
-        relevance_effect.get(information_relevance, 0) +
-        frequency_effect.get(information_frequency, 0) +
-        brightness_effect
+        relevance_effect.get(information_relevance, 0)
+        + frequency_effect.get(information_frequency, 0)
+        + brightness_effect
     )
 
     fatigue_level = base_fatigueness * (total_effect / 3)  
@@ -267,11 +266,12 @@ def calc_MaxSpeed(awareness_level, fatigueness_level, distraction_level, frequen
     }
 
     max_speed = (
-        base_speed * (
-            awareness_effect + 
-            fatigueness_effect + 
-            distraction_effect + 
-            frequency_effect.get(frequency, 0)
+        base_speed 
+        * (
+            awareness_effect 
+            + fatigueness_effect 
+            + distraction_effect 
+            + frequency_effect.get(frequency, 0)
         )
     ) / 10
 
@@ -295,18 +295,19 @@ def calc_acceleration(fatigueness_level, distraction_level, awareness_level, rel
     fatigueness_effect = 0.2 * fatigueness_level
     distraction_effect = 0.5 * distraction_level
 
-    relevance_effect = {
+    relevance_map = {
         "unimportant": 2 * weight_relevance,  
         "neutral":     0 * weight_relevance,  
         "important":   1 * weight_relevance   
     }
     
     acceleration = (
-        base_acceleration * (
-            awareness_effect + 
-            fatigueness_effect + 
-            distraction_effect + 
-            relevance_effect.get(relevance, 0)
+        base_acceleration 
+        * (
+            awareness_effect 
+            + fatigueness_effect 
+            + distraction_effect 
+            + relevance_map.get(relevance, 0)
         )
     ) / 10
     
