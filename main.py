@@ -206,8 +206,6 @@ def save_simulation_data(simulation_data, map, timestamp):
     if checkbox_vars[23].get():
         fieldnames.append('FoV')
 
-    now = datetime.now()
-    timestamp = now.strftime("%H-%M-%S_%Y-%m-%d")
     csv_filename = f'Simulation_data/{map}_{timestamp}_simulation_data.csv'
 
     with open(csv_filename, mode='w', newline='') as file:
