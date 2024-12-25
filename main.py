@@ -15,6 +15,9 @@ import csv
 from datetime import datetime
 import config
 
+# -----------------------------------------------------------------------
+#                          Global / Config
+# -----------------------------------------------------------------------
 carla_base_dir = config.carla_base_dir
 config_script = os.path.join(carla_base_dir, "PythonAPI", "util", "config.py")
 
@@ -29,74 +32,166 @@ maps = {
 information_frequency = ["minimum", "average", "maximum"]
 information_relevance = ["unimportant", "neutral", "important"]
 
-# Internally, SUMO needs full "vehicle.foo.bar" IDs, 
-# but for the UI we want to hide the "vehicle." prefix
+# Full SUMO type IDs
 vehicle_type_full = [
     "vehicle.audi.a2", "vehicle.audi.tt",
-    "vehicle.chevrolet.impala", "vehicle.mini.cooper_s", 
+    "vehicle.chevrolet.impala", "vehicle.mini.cooper_s",
     "vehicle.mercedes.coupe", "vehicle.bmw.grandtourer",
     "vehicle.citroen.c3", "vehicle.ford.mustang",
-    "vehicle.volkswagen.t2", "vehicle.lincoln.mkz_2017", 
+    "vehicle.volkswagen.t2", "vehicle.lincoln.mkz_2017",
     "vehicle.seat.leon"
 ]
 
-# Make a dictionary: short UI name -> full vehicle type
+# Dictionary: short UI name -> full "vehicle.xxx"
 vehicle_ui_map = {
     vt.replace("vehicle.", ""): vt for vt in vehicle_type_full
 }
-
-# For the combo box in the GUI, we display just the short name
 available_vehicle_types = list(vehicle_ui_map.keys())
-
 all_vehicle_types = available_vehicle_types[:]
 
 vtypes_xml_path = os.path.join(sumo_base_dir, "examples", "carlavtypes.rou.xml")
 
+# Base definition for "HUD-less" car
 base_frame = {
     'HUDname': "HUD-less car",
     'entry': 5,
-    'brightness_var': 0.4,   # float default
+    'brightness_var': 0.4,   # numeric brightness
     'frequency_var': "none",
     'relevance_var': "none",
-    'fov_var': 60.0,         # float default
+    'fov_var': 60.0,         # numeric FoV
     'vehicle_type': "vehicle.nissan.patrol",
     'hud_id': "999"
 }
 
+# Used at runtime for mapping each SUMO vehicle ID -> custom vehicle type
+vehicle_type_mapping = {}
+
 hud_id_mapping = {}
-objects = []
 hud_data = {}
+hud_frames = []
+string_hud_frames = []
+checkbox_vars = []
+next_hud_id = 1
+
+# -----------------------------------------------------------------------
+#                           Tooltip Class
+# -----------------------------------------------------------------------
+class ToolTip:
+    """A small popup tooltip that appears when hovering over a widget."""
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tooltip_window = None
+
+    def show_tooltip(self, event=None):
+        if not self.widget:
+            return
+        try:
+            x, y, _, _ = self.widget.bbox("insert")
+        except tk.TclError:
+            x, y = 10, 10
+        x += self.widget.winfo_rootx() + 50
+        y += self.widget.winfo_rooty() + 20
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+
+        self.tooltip_window = tk.Toplevel(self.widget)
+        self.tooltip_window.wm_overrideredirect(True)
+        self.tooltip_window.wm_geometry(f"+{x}+{y}")
+
+        label = tk.Label(
+            self.tooltip_window,
+            text=self.text,
+            justify="left",
+            bg="#ffffe0",
+            relief="solid",
+            borderwidth=1,
+            wraplength=220
+        )
+        label.pack(ipadx=1)
+
+    def hide_tooltip(self, event=None):
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
+
+# -----------------------------------------------------------------------
+#                         Utility Functions
+# -----------------------------------------------------------------------
+def validate_integer_input(value):
+    return value.isdigit() and int(value) > 0
+
+def on_validate_input(value, entry):
+    if validate_integer_input(value):
+        entry.config(bg="white")
+    else:
+        entry.config(bg="red")
+    return True
+
+def update_scrollregion(canvas, container):
+    canvas.update_idletasks()
+    canvas.config(scrollregion=container.bbox("all"))
 
 def are_all_fields_valid():
     all_valid = True
-    for hud_frame in hud_frames:
-        entry_value = hud_frame['entry'].get()
-        if not validate_integer_input(entry_value):
-            hud_frame['entry'].config(bg="red")
+    for hud in hud_frames:
+        val = hud['entry'].get()
+        if not val.isdigit() or int(val) <= 0:
+            hud['entry'].config(bg="red")
             all_valid = False
         else:
-            hud_frame['entry'].config(bg="white")
+            hud['entry'].config(bg="white")
     return all_valid
 
-def run_simulation(map):
+# -----------------------------------------------------------------------
+# convert_hudFrames
+# -----------------------------------------------------------------------
+def convert_hudFrames():
     """
-    Function that handles getting the data from the simulation via Traci 
-    and setting the minimal Gap dynamically.
+    Convert hud_frames -> string_hud_frames by extracting numeric brightness/fov
+    and turning them into strings for writing to XML, etc.
     """
-    min_gap_mapping = {}
-    for vehicle_type, data in hud_data.items():
-        min_gap = data.get("min_Gap")
-        min_gap_mapping[vehicle_type] = min_gap
+    string_hud_frames.clear()
+    for hud in hud_frames:
+        brightness_val = str(hud['brightness_var'].get())
+        fov_val = str(hud['fov_var'].get())
 
+        short_name = hud['vehicle_type'].get()
+        full_name = vehicle_ui_map.get(short_name, "vehicle.unknown")
+
+        hud_dict = {
+            'HUDname':         hud['HUDname'].get(),
+            'entry':           hud['entry'].get(),
+            'brightness_var':  brightness_val,
+            'frequency_var':   hud['frequency_var'].get(),
+            'relevance_var':   hud['relevance_var'].get(),
+            'fov_var':         fov_val,
+            'vehicle_type':    full_name,
+            'hud_id':          str(hud['hud_id'])
+        }
+        string_hud_frames.append(hud_dict)
+    print("Converted hud_frames => string_hud_frames:", string_hud_frames)
+
+# -----------------------------------------------------------------------
+# run_simulation
+# -----------------------------------------------------------------------
+def run_simulation(map_name):
+    """
+    Start SUMO with FCD-output, run step-by-step, adjusting minGap, collecting data.
+    """
     now = datetime.now()
     timestamp = now.strftime("%H-%M-%S_%Y-%m-%d")
+    fcd_filename = f'Simulation_data/{map_name}_{timestamp}_fcd_data.xml'
 
-    fcd_filename = f'Simulation_data/{map}_{timestamp}_fcd_data.xml'
-
-    path = os.path.join(sumo_base_dir, "examples", map + ".sumocfg")
+    path = os.path.join(sumo_base_dir, "examples", map_name + ".sumocfg")
     traci.start(["sumo", "-c", path, '--fcd-output', fcd_filename])
 
     simulation_data = []
+
+    min_gap_mapping = {}
+    for vehicle_type, data in hud_data.items():
+        mg = data.get("min_Gap", 1.0)
+        min_gap_mapping[vehicle_type] = mg
 
     while traci.simulation.getMinExpectedNumber() > 0:
         traci.simulationStep()
@@ -111,300 +206,116 @@ def run_simulation(map):
             simTime = traci.simulation.getTime()
 
             simulation_data.append([
-                vehicle_id, 
-                simTime, 
-                position[0], 
-                position[1], 
-                current_speed, 
-                current_gap, 
-                current_acceleration, 
-                distance_traveled, 
+                vehicle_id,
+                simTime,
+                position[0],
+                position[1],
+                current_speed,
+                current_gap,
+                current_acceleration,
+                distance_traveled,
                 time_loss
             ])
 
-            vehicle_type = vehicle_type_mapping.get(vehicle_id, "unknown")
-            min_gap_for_vehicle_type = hud_data.get(vehicle_type, {}).get("min_Gap", 1)
-            new_min_gap = max(2.0, (current_speed * 0.5 * min_gap_for_vehicle_type))
+            vtype_for_vehicle = vehicle_type_mapping.get(vehicle_id, "unknown")
+            min_gap_for_type = hud_data.get(vtype_for_vehicle, {}).get("min_Gap", 1)
+            new_min_gap = max(2.0, (current_speed * 0.5 * min_gap_for_type))
             traci.vehicle.setMinGap(vehicle_id, new_min_gap)
 
     traci.close()
-    save_simulation_data(simulation_data, map, timestamp)
+    save_simulation_data(simulation_data, map_name, timestamp)
 
-def save_simulation_data(simulation_data, map, timestamp):
+def save_simulation_data(simulation_data, map_name, timestamp):
     """
-    Saves relevant data to .csv depending on which checkboxes are checked.
+    Save relevant data to CSV, depending on checkboxes.
     """
     if not simulation_data or not isinstance(simulation_data, list):
         print("No simulation data available!")
         return
-    
+
     if not any(var.get() for var in checkbox_vars):
         print("No simulation data will be saved!")
         return
-    
-    fieldnames = []
-    if checkbox_vars[0].get():
-        fieldnames.append('map')
-    if checkbox_vars[1].get():
-        fieldnames.append('vehicle_id')
-    if checkbox_vars[2].get():
-        fieldnames.append('hud_id')
-    if checkbox_vars[3].get():
-        fieldnames.append('simulation_time')
-    if checkbox_vars[4].get():
-        fieldnames.append('vehicle_type')
-    if checkbox_vars[5].get():
-        fieldnames.append('position_x')
-    if checkbox_vars[6].get():
-        fieldnames.append('position_y')
-    if checkbox_vars[7].get():
-        fieldnames.append('current_speed')
-    if checkbox_vars[8].get():
-        fieldnames.append('current_gap')
-    if checkbox_vars[9].get():
-        fieldnames.append('current_acceleration')
-    if checkbox_vars[10].get():
-        fieldnames.append('distance_traveled')
-    if checkbox_vars[11].get():
-        fieldnames.append('time_loss')
-    if checkbox_vars[12].get():
-        fieldnames.append('maxSpeed')
-    if checkbox_vars[13].get():
-        fieldnames.append('speedAdherenceFactor')
-    if checkbox_vars[14].get():
-        fieldnames.append('reactionTime')
-    if checkbox_vars[15].get():
-        fieldnames.append('fatiguenessLevel')
-    if checkbox_vars[16].get():
-        fieldnames.append('awarenessLevel')
-    if checkbox_vars[17].get():
-        fieldnames.append('acceleration')
-    if checkbox_vars[18].get():
-        fieldnames.append('minGapFactor')
-    if checkbox_vars[19].get():
-        fieldnames.append('distractionLevel')
-    if checkbox_vars[20].get():
-        fieldnames.append('brightness')
-    if checkbox_vars[21].get():
-        fieldnames.append('information_frequency')
-    if checkbox_vars[22].get():
-        fieldnames.append('information_relevance')
-    if checkbox_vars[23].get():
-        fieldnames.append('FoV')
 
-    csv_filename = f'Simulation_data/{map}_{timestamp}_simulation_data.csv'
+    fieldnames = []
+    if checkbox_vars[0].get(): fieldnames.append('map')
+    if checkbox_vars[1].get(): fieldnames.append('vehicle_id')
+    if checkbox_vars[2].get(): fieldnames.append('hud_id')
+    if checkbox_vars[3].get(): fieldnames.append('simulation_time')
+    if checkbox_vars[4].get(): fieldnames.append('vehicle_type')
+    if checkbox_vars[5].get(): fieldnames.append('position_x')
+    if checkbox_vars[6].get(): fieldnames.append('position_y')
+    if checkbox_vars[7].get(): fieldnames.append('current_speed')
+    if checkbox_vars[8].get(): fieldnames.append('current_gap')
+    if checkbox_vars[9].get(): fieldnames.append('current_acceleration')
+    if checkbox_vars[10].get(): fieldnames.append('distance_traveled')
+    if checkbox_vars[11].get(): fieldnames.append('time_loss')
+    if checkbox_vars[12].get(): fieldnames.append('maxSpeed')
+    if checkbox_vars[13].get(): fieldnames.append('speedAdherenceFactor')
+    if checkbox_vars[14].get(): fieldnames.append('reactionTime')
+    if checkbox_vars[15].get(): fieldnames.append('fatiguenessLevel')
+    if checkbox_vars[16].get(): fieldnames.append('awarenessLevel')
+    if checkbox_vars[17].get(): fieldnames.append('acceleration')
+    if checkbox_vars[18].get(): fieldnames.append('minGapFactor')
+    if checkbox_vars[19].get(): fieldnames.append('distractionLevel')
+    if checkbox_vars[20].get(): fieldnames.append('brightness')
+    if checkbox_vars[21].get(): fieldnames.append('information_frequency')
+    if checkbox_vars[22].get(): fieldnames.append('information_relevance')
+    if checkbox_vars[23].get(): fieldnames.append('FoV')
+
+    csv_filename = f'Simulation_data/{map_name}_{timestamp}_simulation_data.csv'
+
     with open(csv_filename, mode='w', newline='') as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
 
         for entry in simulation_data:
             row_data = {}
-            vehicle_type = vehicle_type_mapping.get(entry[0], "unknown")
-            hud_data_for_type = hud_data.get(vehicle_type, {})
+            vtype = vehicle_type_mapping.get(entry[0], "unknown")
+            hud_data_for_type = hud_data.get(vtype, {})
 
             hud_name = hud_data_for_type.get('HUDname', 'N/A')
-            hud_id_val = hud_id_mapping.get(vehicle_type, "unknown")
+            hud_id_val = hud_id_mapping.get(vtype, "unknown")
             idName = f"{hud_id_val}_{hud_name}"
 
-            if checkbox_vars[0].get():
-                row_data['map'] = map
-            if checkbox_vars[1].get():
-                row_data['vehicle_id'] = entry[0]
-            if checkbox_vars[2].get():
-                row_data['hud_id'] = idName
-            if checkbox_vars[3].get():
-                row_data['simulation_time'] = entry[1]
-            if checkbox_vars[4].get():
-                row_data['vehicle_type'] = vehicle_type
-            if checkbox_vars[5].get():
-                row_data['position_x'] = entry[2]
-            if checkbox_vars[6].get():
-                row_data['position_y'] = entry[3]
-            if checkbox_vars[7].get():
-                row_data['current_speed'] = entry[4]
-            if checkbox_vars[8].get():
-                row_data['current_gap'] = entry[5]
-            if checkbox_vars[9].get():
-                row_data['current_acceleration'] = entry[6]
-            if checkbox_vars[10].get():
-                row_data['distance_traveled'] = entry[7]
-            if checkbox_vars[11].get():
-                row_data['time_loss'] = entry[8]
-            if checkbox_vars[12].get():
-                row_data['maxSpeed'] = hud_data_for_type.get('max_speed', 'N/A')
-            if checkbox_vars[13].get():
-                row_data['speedAdherenceFactor'] = hud_data_for_type.get('speed_factor', 'N/A')
-            if checkbox_vars[14].get():
-                row_data['reactionTime'] = hud_data_for_type.get('reactTime', 'N/A')
-            if checkbox_vars[15].get():
-                row_data['fatiguenessLevel'] = hud_data_for_type.get('fatigueness_level', 'N/A')
-            if checkbox_vars[16].get():
-                row_data['awarenessLevel'] = hud_data_for_type.get('awareness_level', 'N/A')
-            if checkbox_vars[17].get():
-                row_data['acceleration'] = hud_data_for_type.get('accel_factor', 'N/A')
-            if checkbox_vars[18].get():
-                row_data['minGapFactor'] = hud_data_for_type.get('min_Gap', 'N/A')
-            if checkbox_vars[19].get():
-                row_data['distractionLevel'] = hud_data_for_type.get('distraction_level', 'N/A')
-            if checkbox_vars[20].get():
-                row_data['brightness'] = hud_data_for_type.get('brightness', 'N/A')
-            if checkbox_vars[21].get():
-                row_data['information_frequency'] = hud_data_for_type.get('frequency', 'N/A')
-            if checkbox_vars[22].get():
-                row_data['information_relevance'] = hud_data_for_type.get('relevance', 'N/A')
-            if checkbox_vars[23].get():
-                row_data['FoV'] = hud_data_for_type.get('field of view', 'N/A')
+            if checkbox_vars[0].get():  row_data['map'] = map_name
+            if checkbox_vars[1].get():  row_data['vehicle_id'] = entry[0]
+            if checkbox_vars[2].get():  row_data['hud_id'] = idName
+            if checkbox_vars[3].get():  row_data['simulation_time'] = entry[1]
+            if checkbox_vars[4].get():  row_data['vehicle_type'] = vtype
+            if checkbox_vars[5].get():  row_data['position_x'] = entry[2]
+            if checkbox_vars[6].get():  row_data['position_y'] = entry[3]
+            if checkbox_vars[7].get():  row_data['current_speed'] = entry[4]
+            if checkbox_vars[8].get():  row_data['current_gap'] = entry[5]
+            if checkbox_vars[9].get():  row_data['current_acceleration'] = entry[6]
+            if checkbox_vars[10].get(): row_data['distance_traveled'] = entry[7]
+            if checkbox_vars[11].get(): row_data['time_loss'] = entry[8]
+            if checkbox_vars[12].get(): row_data['maxSpeed'] = hud_data_for_type.get('max_speed', 'N/A')
+            if checkbox_vars[13].get(): row_data['speedAdherenceFactor'] = hud_data_for_type.get('speed_factor', 'N/A')
+            if checkbox_vars[14].get(): row_data['reactionTime'] = hud_data_for_type.get('reactTime', 'N/A')
+            if checkbox_vars[15].get(): row_data['fatiguenessLevel'] = hud_data_for_type.get('fatigueness_level', 'N/A')
+            if checkbox_vars[16].get(): row_data['awarenessLevel'] = hud_data_for_type.get('awareness_level', 'N/A')
+            if checkbox_vars[17].get(): row_data['acceleration'] = hud_data_for_type.get('accel_factor', 'N/A')
+            if checkbox_vars[18].get(): row_data['minGapFactor'] = hud_data_for_type.get('min_Gap', 'N/A')
+            if checkbox_vars[19].get(): row_data['distractionLevel'] = hud_data_for_type.get('distraction_level', 'N/A')
+            if checkbox_vars[20].get(): row_data['brightness'] = hud_data_for_type.get('brightness', 'N/A')
+            if checkbox_vars[21].get(): row_data['information_frequency'] = hud_data_for_type.get('frequency', 'N/A')
+            if checkbox_vars[22].get(): row_data['information_relevance'] = hud_data_for_type.get('relevance', 'N/A')
+            if checkbox_vars[23].get(): row_data['FoV'] = hud_data_for_type.get('field of view', 'N/A')
 
             writer.writerow(row_data)
 
-string_hud_frames = []
-
-def convert_hudFrames():
-    """
-    Convert all saved HUD frames to string-based dictionaries 
-    for writing XML, etc.
-    """
-    for hud in hud_frames:
-        brightness_val = str(hud['brightness_var'].get())
-        fov_val = str(hud['fov_var'].get())
-
-        # Replace the short UI name with the full 'vehicle.' name
-        selected_vehicle_short = hud['vehicle_type'].get()
-        selected_vehicle_full = vehicle_ui_map.get(selected_vehicle_short, "vehicle.unknown")
-
-        string_hud = {
-            'HUDname':       str(hud['HUDname'].get()),
-            'entry':         str(hud['entry'].get()),
-            'brightness_var': brightness_val,
-            'frequency_var':  str(hud['frequency_var'].get()),
-            'relevance_var':  str(hud['relevance_var'].get()),
-            'fov_var':        fov_val,
-            'vehicle_type':   selected_vehicle_full,
-            'hud_id':         str(hud['hud_id'])
-        }
-        string_hud_frames.append(string_hud)
-    print(string_hud_frames)
-
-def map_vehicle_type_to_hud_id():
-    for hud in string_hud_frames:
-        vehicle_type = hud['vehicle_type']
-        hud_id = hud['hud_id']
-        hud_id_mapping[vehicle_type] = hud_id
-
-def start_simulation():
-    """
-    Start the simulation after validating inputs.
-    """
-    if not map_list.curselection():
-        messagebox.showwarning("No map selected", "Please select a map for the simulation.")
-        return
-    
-    if not are_all_fields_valid():
-        messagebox.showwarning("Invalid Inputs", "Please enter valid inputs for all the input fields!")
-        return
-    
-    if hudless_var.get() is False and len(hud_frames) == 0:
-        messagebox.showwarning("No simulation data", "Please allow simulation without HUD or create HUDs to simulate.")
-        return
-
-    selected_index = map_list.curselection()
-
-    convert_hudFrames()
-
-    if hudless_var.get():
-        # Add HUD-less car
-        string_hud_frames.append(base_frame)
-        hud_id_mapping["vehicle.nissan.patrol"] = "999"
-
-    map_vehicle_type_to_hud_id()
-    hud_data_local = hudSelection()
-
-    update_vehicles(carla_base_dir + r"\Co-Simulation\Sumo\examples\carlavtypes.rou.xml", hud_data_local)
-
-    if selected_index:
-        selected_map = map_list.get(selected_index[0])
-        selected_sumocfg = maps[selected_map]
-
-        writeXML(string_hud_frames)
-        modify_vehicle_routes(selected_map)
-
-        carla_exe = os.path.join(carla_base_dir, "CarlaUE4.exe")
-
-        if spectate_var.get() and simulate_var.get() == False:
-            # Carla in RenderOffScreenMode
-            try:
-                print("Starting CARLA in RenderOffScreenMode")
-                subprocess.Popen([carla_exe, "-RenderOffScreen"])
-                time.sleep(20)
-
-                print("Starting configuration script: {}".format(config_script))
-                config_command = ["python", config_script, "--map", selected_map]
-                configsubprocess = subprocess.Popen(config_command, cwd=os.path.dirname(config_script))
-                configsubprocess.wait()
-
-                sync_script = os.path.join(sumo_base_dir, "run_synchronization.py")
-                print("Starting synchronisation script with SUMO: {}".format(selected_sumocfg))
-                sync_command = ["python", sync_script, selected_sumocfg, "--sumo-gui", "--sync-vehicle-color"]
-                subprocess.Popen(sync_command, cwd=os.path.dirname(sync_script))
-
-                try:
-                    print("Starting spectator")
-                    spectatorpath = "./spectator.py"
-                    spectatordir = os.path.dirname(spectatorpath)
-                    subprocess.Popen(["python", spectatorpath, spectatordir])
-                    print("Spectator started")
-                except FileNotFoundError as e:
-                    print("Couldn't start the spectator", e)
-
-                run_simulation(selected_map)
-
-            except FileNotFoundError as e:
-                print("Couldn't start the simulation:", e)
-
-        elif simulate_var.get():
-            # Full Carla with rendering
-            try:
-                print("Starting CarlaUE4.exe...")
-                subprocess.Popen([carla_exe])
-                time.sleep(20)
-
-                print("Starting configuration script: {}".format(config_script))
-                config_command = ["python", config_script, "--map", selected_map]
-                configsubprocess = subprocess.Popen(config_command, cwd=os.path.dirname(config_script))
-                configsubprocess.wait()
-
-                sync_script = os.path.join(sumo_base_dir, "run_synchronization.py")
-                print("Starting synchronisation script with SUMO: {}".format(selected_sumocfg))
-                sync_command = ["python", sync_script, selected_sumocfg, "--sumo-gui", "--sync-vehicle-color"]
-                subprocess.Popen(sync_command, cwd=os.path.dirname(sync_script))
-
-                if spectate_var.get():
-                    try:
-                        print("Starting spectator")
-                        spectatorpath = "./spectator.py"
-                        spectatordir = os.path.dirname(spectatorpath)
-                        subprocess.Popen(["python", spectatorpath, spectatordir])
-                        print("Spectator started")
-                    except FileNotFoundError as e:
-                        print("Couldn't start the spectator: ", e)
-
-                run_simulation(selected_map)
-
-            except FileNotFoundError as e:
-                print("Couldn't start the simulation: ", e)
-
-        else:
-            # SUMO only
-            start_sumo(selected_sumocfg)
-            run_simulation(selected_map)
-
+# -----------------------------------------------------------------------
+# hudSelection
+# -----------------------------------------------------------------------
 def hudSelection():
     """
-    Convert slider strings back to floats, call calculations, 
-    and store results in hud_data for each vehicle type.
+    Convert the user selections to numeric brightness/fov, then call calculations
+    to build the hud_data dict for each vehicle type.
+    Now returns hud_data, avoiding a NoneType return.
     """
     global hud_data
-    hud_data.clear()  # reset
+    hud_data.clear()
 
     for hud in string_hud_frames:
         brightness_str = hud['brightness_var']
@@ -414,7 +325,6 @@ def hudSelection():
         vehicle_type = hud['vehicle_type']
         HUDname = hud['HUDname']
 
-        # Convert string back to float
         try:
             brightness_val = float(brightness_str)
         except ValueError:
@@ -425,6 +335,7 @@ def hudSelection():
         except ValueError:
             fov_val = 60.0
 
+        # Example: calling calculations from your 'calculations' module:
         distraction_level = calculations.calc_distraction(relevance_str, frequency_str, brightness_val, fov_val)
         fatigueness_level = calculations.calc_fatigueness(relevance_str, frequency_str, brightness_val)
         awareness_level   = calculations.calc_awareness(relevance_str, frequency_str, distraction_level, fatigueness_level, fov_val)
@@ -437,12 +348,11 @@ def hudSelection():
         hud_data[vehicle_type] = {
             'HUDname':           HUDname,
             'distraction_level': distraction_level,
-            'reactTime':         reactTime,
             'fatigueness_level': fatigueness_level,
             'awareness_level':   awareness_level,
+            'reactTime':         reactTime,
             'max_speed':         maxSpeed,
             "min_Gap":           minGap,
-            'vehicle_type':      vehicle_type,
             'speed_factor':      speedFactor,
             'accel_factor':      accel,
             'brightness':        brightness_val,
@@ -450,49 +360,17 @@ def hudSelection():
             'relevance':         relevance_str,
             'field of view':     fov_val
         }
+    print("hud_data built =>", hud_data)
     return hud_data
 
-def writeXML(hud_list):
+def update_vehicles(xml_file_path, local_data):
     """
-    Writes HUD data to an XML (hudconfig.xml) for the spectator client.
-    """
-    root = ET.Element("Vehicles")
-
-    for hud in hud_list:
-        vehicle_type = hud['vehicle_type']
-        brightness_str = hud['brightness_var']
-        frequency = hud['frequency_var']
-        relevance = hud['relevance_var']
-        fov_str = hud['fov_var']
-        hud_name = hud['HUDname']
-
-        vehicle_element = ET.SubElement(root, "Vehicle", type_id=vehicle_type)
-        ET.SubElement(vehicle_element, "HUDName").text = hud_name
-        ET.SubElement(vehicle_element, "Brightness").text = brightness_str
-        ET.SubElement(vehicle_element, "Frequency").text = frequency
-        ET.SubElement(vehicle_element, "Relevance").text = relevance
-        ET.SubElement(vehicle_element, "FoV").text = fov_str
-
-    tree = ET.ElementTree(root)
-    xml_file_path = "hudconfig.xml"
-    tree.write(xml_file_path, encoding="utf-8", xml_declaration=True)
-
-    dom = minidom.parseString(ET.tostring(root))
-    pretty_xml_as_string = dom.toprettyxml()
-    with open(xml_file_path, "w") as f:
-        f.write(pretty_xml_as_string)
-
-    return xml_file_path
-
-def update_vehicles(xml_file_path, hud_data):
-    """
-    Update the .rou.xml file with new behaviors (maxSpeed, speedFactor, etc.) 
-    for each vType that matches a vehicle type in hud_data.
+    Updates the vehicle types in the .rou.xml with new behaviors (maxSpeed, etc.).
     """
     tree = ET.parse(xml_file_path)
     root = tree.getroot()
 
-    for vehicle_type, data in hud_data.items():
+    for vehicle_type, data in local_data.items():
         if vehicle_type.lower() == "vehicle.nissan.patrol":
             continue
 
@@ -524,393 +402,495 @@ def update_vehicles(xml_file_path, hud_data):
                     driverstate_param2.set('key', 'actionStepLength')
                     driverstate_param2.set('value', str(reactionTime))
 
-                color = "#{:02x}{:02x}{:02x}".format(random.randint(0, 255), 
-                                                     random.randint(0, 255), 
-                                                     random.randint(0, 255))
+                color = "#{:02x}{:02x}{:02x}".format(random.randint(0,255), random.randint(0,255), random.randint(0,255))
                 vtype_elem.set('color', color)
 
     tree.write(xml_file_path, encoding='utf-8', xml_declaration=True)
 
-def prettify(elem):
-    rough_string = ET.tostring(elem, 'utf-8')
-    reparsed = minidom.parseString(rough_string)
-    return reparsed.toprettyxml(indent="    ")
-
-def start_sumo(selected_sumocfg):
-    try:
-        subprocess.Popen(['sumo-gui', '-c', selected_sumocfg])
-    except FileNotFoundError:
-        print("Couldn't start SUMO. Please check if your SUMO path is correct.")
-
-def modify_vehicle_routes(selected_map):
+def modify_vehicle_routes(map_name):
     """
-    Function to set the vehicle types in the .rou file according to user probabilities.
+    Adjust the vehicle types in the .rou file by user-defined probabilities.
+    Also fallback if we get 'vehicle.unknown'.
     """
-    original_routes_file = os.path.join(sumo_base_dir, "examples", "rou", selected_map + ".rou.xml")
-
+    original_routes_file = os.path.join(sumo_base_dir, "examples", "rou", map_name + ".rou.xml")
     try:
         tree = ET.parse(original_routes_file)
         root = tree.getroot()
 
         vehicle_types = []
         probabilities = []
-
         for hud in string_hud_frames:
-            probability = int(hud['entry'].get())
-            # We stored the full type in the dictionary
-            full_vehicle_type = vehicle_ui_map.get(hud['vehicle_type'].get(), "vehicle.unknown")
-            vehicle_types.append(full_vehicle_type)
+            probability = int(hud['entry'])
+            short_vtype = hud['vehicle_type']
+            # lookup in dictionary. If not found, fallback to 'vehicle.unknown'
+            full_vtype = vehicle_ui_map.get(short_vtype, "vehicle.unknown")
+            vehicle_types.append(full_vtype)
             probabilities.append(probability)
 
         for vehicle in root.findall('vehicle'):
             if vehicle_types:
                 vehicle_id = vehicle.get('id')
-                chosen_vehicle_type = random.choices(vehicle_types, probabilities)[0]
-                vehicle.set('type', chosen_vehicle_type)
-                vehicle_type_mapping[vehicle_id] = chosen_vehicle_type
+                chosen_type = random.choices(vehicle_types, probabilities)[0]
+                # fallback if still vehicle.unknown
+                if chosen_type == "vehicle.unknown":
+                    # pick a known fallback, e.g. 'vehicle.audi.a2'
+                    chosen_type = "vehicle.audi.a2"
+                vehicle.set('type', chosen_type)
+                vehicle_type_mapping[vehicle_id] = chosen_type
 
         tree.write(original_routes_file)
-
     except FileNotFoundError:
         print(f"Couldn't find: {original_routes_file}")
 
-def close_window():
-    root.destroy()
+def writeXML(hud_list):
+    """
+    Writes hudconfig.xml for the spectator client, storing user-chosen strings.
+    """
+    root = ET.Element("Vehicles")
 
-next_hud_id = 1
+    for hud in hud_list:
+        vehicle_type = hud['vehicle_type']
+        brightness_str = hud['brightness_var']
+        frequency = hud['frequency_var']
+        relevance = hud['relevance_var']
+        fov_str = hud['fov_var']
+        hud_name = hud['HUDname']
+
+        vehicle_element = ET.SubElement(root, "Vehicle", type_id=vehicle_type)
+        ET.SubElement(vehicle_element, "HUDName").text = hud_name
+        ET.SubElement(vehicle_element, "Brightness").text = brightness_str
+        ET.SubElement(vehicle_element, "Frequency").text = frequency
+        ET.SubElement(vehicle_element, "Relevance").text = relevance
+        ET.SubElement(vehicle_element, "FoV").text = fov_str
+
+    tree = ET.ElementTree(root)
+    xml_file_path = "hudconfig.xml"
+    tree.write(xml_file_path, encoding="utf-8", xml_declaration=True)
+
+    dom = minidom.parseString(ET.tostring(root))
+    pretty_xml = dom.toprettyxml()
+    with open(xml_file_path, "w") as f:
+        f.write(pretty_xml)
+
+    return xml_file_path
+
+def start_sumo(selected_sumocfg):
+    """
+    Start SUMO with GUI if present.
+    """
+    try:
+        subprocess.Popen(['sumo-gui', '-c', selected_sumocfg])
+    except FileNotFoundError:
+        print("Couldn't start SUMO. Please check if your SUMO path is correct.")
+
+def map_vehicle_type_to_hud_id():
+    """
+    For each HUD in string_hud_frames, map the SUMO vType to the hud_id in hud_id_mapping.
+    """
+    hud_id_mapping.clear()
+    for hud in string_hud_frames:
+        vehicle_type = hud['vehicle_type']
+        hud_id = hud['hud_id']
+        hud_id_mapping[vehicle_type] = hud_id
+
+def start_simulation():
+    """
+    Combine all logic to start the sim. Co-Simulation with Carla or SUMO only.
+    """
+    if not map_list.curselection():
+        messagebox.showwarning("No map selected", "Please select a map for the simulation.")
+        return
+
+    if not are_all_fields_valid():
+        messagebox.showwarning("Invalid Inputs", "Please enter valid integers > 0 for HUD probability!")
+        return
+
+    if hudless_var.get() == False and len(hud_frames) == 0:
+        messagebox.showwarning("No simulation data", "Please allow simulation without HUD or create HUDs to simulate.")
+        return
+
+    selected_index = map_list.curselection()
+    # Convert frames => string-based data
+    convert_hudFrames()
+
+    if hudless_var.get():
+        # Add HUD-less
+        string_hud_frames.append(base_frame)
+        hud_id_mapping["vehicle.nissan.patrol"] = "999"
+
+    # build hud_id_mapping from string_hud_frames
+    map_vehicle_type_to_hud_id()
+    # build hud_data with calculations (IMPORTANT: must return hud_data)
+    local_data = hudSelection()  
+    # update .rou.xml for new behaviors
+    update_vehicles(vtypes_xml_path, local_data)
+
+    if selected_index:
+        selected_map = map_list.get(selected_index[0])
+        # e.g., write an XML for spectator
+        writeXML(string_hud_frames)
+        # modify routes
+        modify_vehicle_routes(selected_map)
+
+        carla_exe = os.path.join(carla_base_dir, "CarlaUE4.exe")
+
+        if spectate_var.get() and simulate_var.get() == False:
+            # Carla in RenderOffScreenMode
+            try:
+                print("Starting CARLA in RenderOffScreenMode")
+                subprocess.Popen([carla_exe, "-RenderOffScreen"])
+                time.sleep(20)
+                print("Running config script:", config_script)
+                config_command = ["python", config_script, "--map", selected_map]
+                configsubprocess = subprocess.Popen(config_command, cwd=os.path.dirname(config_script))
+                configsubprocess.wait()
+
+                sync_script = os.path.join(sumo_base_dir, "run_synchronization.py")
+                print("Starting synchronization script with SUMO:", maps[selected_map])
+                sync_command = ["python", sync_script, maps[selected_map], "--sumo-gui", "--sync-vehicle-color"]
+                subprocess.Popen(sync_command, cwd=os.path.dirname(sync_script))
+
+                try:
+                    print("Starting spectator")
+                    spectatorpath = "./spectator.py"
+                    spectatordir = os.path.dirname(spectatorpath)
+                    subprocess.Popen(["python", spectatorpath, spectatordir])
+                    print("Spectator started")
+                except FileNotFoundError as e:
+                    print("Couldn't start the spectator:", e)
+
+                run_simulation(selected_map)
+
+            except FileNotFoundError as e:
+                print("Couldn't start the simulation:", e)
+
+        elif simulate_var.get():
+            try:
+                print("Starting CarlaUE4.exe...")
+                subprocess.Popen([carla_exe])
+                time.sleep(20)
+                print("Running config script:", config_script)
+                config_command = ["python", config_script, "--map", selected_map]
+                configsubprocess = subprocess.Popen(config_command, cwd=os.path.dirname(config_script))
+                configsubprocess.wait()
+
+                sync_script = os.path.join(sumo_base_dir, "run_synchronization.py")
+                print("Starting synchronization script with SUMO:", maps[selected_map])
+                sync_command = ["python", sync_script, maps[selected_map], "--sumo-gui", "--sync-vehicle-color"]
+                subprocess.Popen(sync_command, cwd=os.path.dirname(sync_script))
+
+                if spectate_var.get():
+                    try:
+                        print("Starting spectator")
+                        spectatorpath = "./spectator.py"
+                        spectatordir = os.path.dirname(spectatorpath)
+                        subprocess.Popen(["python", spectatorpath, spectatordir])
+                        print("Spectator started")
+                    except FileNotFoundError as e:
+                        print("Couldn't start the spectator:", e)
+
+                run_simulation(selected_map)
+
+            except FileNotFoundError as e:
+                print("Couldn't start the simulation:", e)
+
+        else:
+            # SUMO only
+            start_sumo_config = maps[selected_map]
+            start_sumo(start_sumo_config)
+            run_simulation(selected_map)
+
+def create_hud_frame(hud_id):
+    """
+    Creates a single HUD frame with brightness/FoV sliders, combobox, etc.
+    Returns a dict with references to user selections and widgets.
+    """
+    hud_num = len(hud_frames) + 1
+    frame = tk.Frame(hud_list_frame, bg="white", bd=2, relief="raised")
+
+    # HUD Name
+    hudname_entry = tk.Entry(frame, width=22, font=("Helvetica", 14, "bold"))
+    hudname_entry.insert(0, f"HUD {hud_num}")
+    hudname_entry.grid(row=0, column=0, columnspan=3, padx=10, pady=(5,10), sticky="w")
+
+    # Probability
+    lbl_prob = tk.Label(frame, text="HUD Probability:", bg="white", font=("Helvetica", 11))
+    lbl_prob.grid(row=1, column=0, pady=5, padx=5, sticky="w")
+
+    prob_var = tk.StringVar()
+    prob_entry = tk.Entry(frame, textvariable=prob_var, width=12, font=("Helvetica", 11))
+    cmd_val = frame.register(lambda val: on_validate_input(val, prob_entry))
+    prob_entry.config(validate="key", validatecommand=(cmd_val, "%P"))
+    prob_entry.insert(0, "1")
+    prob_entry.grid(row=1, column=1, pady=5, padx=5, sticky="w")
+
+    prob_btn = tk.Button(frame, text="?", width=3)
+    prob_btn.grid(row=1, column=2, padx=5)
+    prob_tt = ToolTip(prob_btn, "Probability is an integer > 0.\nE.g. '3' => 3x more likely than '1'.")
+    prob_btn.bind("<Enter>", lambda e, t=prob_tt: t.show_tooltip())
+    prob_btn.bind("<Leave>", lambda e, t=prob_tt: t.hide_tooltip())
+
+    # spacer
+    spacer = tk.Label(frame, text="", bg="white", font=("Helvetica", 2))
+    spacer.grid(row=2, column=0, columnspan=3)
+
+    # Brightness
+    lbl_bright = tk.Label(frame, text="HUD brightness:", bg="white", font=("Helvetica", 11))
+    lbl_bright.grid(row=3, column=0, pady=5, padx=5, sticky="w")
+
+    bright_scale = tk.Scale(
+        frame, from_=0.0, to=0.9, resolution=0.01,
+        orient=tk.HORIZONTAL, length=180,
+        bg="white", font=("Helvetica", 10),
+        tickinterval=0, showvalue=True
+    )
+    bright_scale.set(0.4)
+    bright_scale.grid(row=3, column=1, pady=5, padx=5, sticky="we")
+
+    bright_btn = tk.Button(frame, text="?", width=3)
+    bright_btn.grid(row=3, column=2, padx=5)
+    bright_tt = ToolTip(bright_btn, "0.0 => fully opaque,\n0.9 => near-invisible.\nSlider shows current value.")
+    bright_btn.bind("<Enter>", lambda e, t=bright_tt: t.show_tooltip())
+    bright_btn.bind("<Leave>", lambda e, t=bright_tt: t.hide_tooltip())
+
+    # Frequency
+    lbl_freq = tk.Label(frame, text="Information frequency:", bg="white", font=("Helvetica", 11))
+    lbl_freq.grid(row=4, column=0, pady=5, padx=5, sticky="w")
+
+    freq_var = tk.StringVar()
+    freq_var.set(information_frequency[1])
+    freq_menu = ttk.Combobox(frame, textvariable=freq_var, values=information_frequency,
+                             state="readonly", font=("Helvetica", 11))
+    freq_menu.grid(row=4, column=1, pady=5, padx=5, sticky="we")
+
+    freq_btn = tk.Button(frame, text="?", width=3)
+    freq_btn.grid(row=4, column=2, padx=5)
+    freq_tt = ToolTip(freq_btn, "Minimum=only when needed,\nMaximum=always displayed.")
+    freq_btn.bind("<Enter>", lambda e, t=freq_tt: t.show_tooltip())
+    freq_btn.bind("<Leave>", lambda e, t=freq_tt: t.hide_tooltip())
+
+    # Relevance
+    lbl_relev = tk.Label(frame, text="Information relevance:", bg="white", font=("Helvetica", 11))
+    lbl_relev.grid(row=5, column=0, pady=5, padx=5, sticky="w")
+
+    relev_var = tk.StringVar()
+    relev_var.set(information_relevance[1])
+    relev_menu = ttk.Combobox(frame, textvariable=relev_var, values=information_relevance,
+                              state="readonly", font=("Helvetica", 11))
+    relev_menu.grid(row=5, column=1, pady=5, padx=5, sticky="we")
+
+    relev_btn = tk.Button(frame, text="?", width=3)
+    relev_btn.grid(row=5, column=2, padx=5)
+    relev_tt = ToolTip(relev_btn, "'unimportant' => includes music/weather,\n'important' => essential only.")
+    relev_btn.bind("<Enter>", lambda e, t=relev_tt: t.show_tooltip())
+    relev_btn.bind("<Leave>", lambda e, t=relev_tt: t.hide_tooltip())
+
+    # spacer
+    spacer2 = tk.Label(frame, text="", bg="white", font=("Helvetica", 2))
+    spacer2.grid(row=6, column=0, columnspan=3)
+
+    # FoV
+    lbl_fov = tk.Label(frame, text="Field of View:", bg="white", font=("Helvetica", 11))
+    lbl_fov.grid(row=7, column=0, pady=5, padx=5, sticky="w")
+
+    fov_scale = tk.Scale(
+        frame, from_=30, to=100, resolution=1,
+        orient=tk.HORIZONTAL, length=180,
+        bg="white", font=("Helvetica", 10),
+        tickinterval=0, showvalue=True
+    )
+    fov_scale.set(60)
+    fov_scale.grid(row=7, column=1, pady=5, padx=5, sticky="we")
+
+    fov_btn = tk.Button(frame, text="?", width=3)
+    fov_btn.grid(row=7, column=2, padx=5)
+    fov_tt = ToolTip(fov_btn, "Smaller => near wheel,\nLarger => entire windshield.\nSlider shows current value.")
+    fov_btn.bind("<Enter>", lambda e, t=fov_tt: t.show_tooltip())
+    fov_btn.bind("<Leave>", lambda e, t=fov_tt: t.hide_tooltip())
+
+    # Vehicle Type
+    lbl_vtype = tk.Label(frame, text="Select vehicle type:", bg="white", font=("Helvetica", 11))
+    lbl_vtype.grid(row=8, column=0, pady=5, padx=5, sticky="w")
+
+    vtype_var = tk.StringVar()
+    if available_vehicle_types:
+        vtype_var.set(available_vehicle_types[0])
+    else:
+        vtype_var.set("NoMoreTypes")
+
+    vtype_menu = ttk.Combobox(frame, textvariable=vtype_var, values=available_vehicle_types,
+                              state="readonly", font=("Helvetica", 11))
+    vtype_menu.grid(row=8, column=1, pady=5, padx=5, sticky="we")
+
+    remove_btn = tk.Button(frame, text="Remove HUD", bg="#ff6347", fg="white", width=15,
+                           font=("Helvetica", 12))
+    remove_btn.grid(row=9, column=0, columnspan=3, pady=10)
+
+    new_hud = {
+        'frame':         frame,
+        'HUDname':       hudname_entry,
+        'entry':         prob_entry,
+        'brightness_var': bright_scale,
+        'frequency_var':  freq_var,
+        'relevance_var':  relev_var,
+        'fov_var':        fov_scale,
+        'vehicle_type':   vtype_var,
+        'hud_id':         hud_id
+    }
+    remove_btn.config(command=lambda: remove_hud(new_hud['hud_id']))
+
+    return new_hud
 
 def add_hud():
     global next_hud_id
     if len(hud_frames) >= len(all_vehicle_types):
-        messagebox.showwarning("No available IDs", "There are no vehicle types available for simulation!")
+        messagebox.showwarning("No available IDs", "No vehicle types left for simulation!")
         return
 
-    hud_frame = create_hud_frame(next_hud_id)
-    hud_frames.append(hud_frame)
+    hud_obj = create_hud_frame(next_hud_id)
+    hud_frames.append(hud_obj)
 
-    # Remove the chosen vehicle from the available list
-    selected_short_name = hud_frame['vehicle_type'].get()
-    if selected_short_name in available_vehicle_types:
-        available_vehicle_types.remove(selected_short_name)
+    short_vtype = hud_obj['vehicle_type'].get()
+    if short_vtype in available_vehicle_types:
+        available_vehicle_types.remove(short_vtype)
 
-    hud_frame['frame'].pack(pady=10, padx=20, ipadx=10, ipady=10, fill="x")
-    update_scrollregion()
-    
-    print("Added HUD: " + str(len(hud_frames)))
+    row_idx = len(hud_frames)
+    hud_obj['frame'].grid(row=row_idx, column=0, padx=10, pady=10, sticky="we")
+
     next_hud_id += 1
+    update_scrollregion(main_canvas, hud_list_frame)
 
 def remove_hud(hud_id):
     global hud_frames
-    hud_to_remove = next((hud for hud in hud_frames if hud['hud_id'] == hud_id), None)
-    if hud_to_remove:
-        # Return the vehicle type to the available list
-        selected_short_name = hud_to_remove['vehicle_type'].get()
-        available_vehicle_types.append(selected_short_name)
-
-        hud_to_remove['frame'].destroy()
-        hud_frames = [hud for hud in hud_frames if hud['hud_id'] != hud_id]
-        update_scrollregion()
+    hud_obj = next((h for h in hud_frames if h['hud_id'] == hud_id), None)
+    if hud_obj:
+        short_vtype = hud_obj['vehicle_type'].get()
+        available_vehicle_types.append(short_vtype)
+        hud_obj['frame'].destroy()
+        hud_frames = [h for h in hud_frames if h['hud_id'] != hud_id]
+        update_scrollregion(main_canvas, hud_list_frame)
     else:
         print(f"No HUD found with ID: {hud_id}")
-
-def update_scrollregion():
-    canvas.update_idletasks()
-    canvas.config(scrollregion=canvas.bbox("all"))
-
-def validate_integer_input(value):
-    return value.isdigit() and int(value) > 0
-
-def on_validate_input(value, entry):
-    reselect_map()
-    if validate_integer_input(value):
-        entry.config(bg="white")
-    else:
-        entry.config(bg="red")
-    return True
-
-def create_hud_frame(next_hud_id):
-    """
-    Create a new HUD frame with:
-      - Probability (Entry)
-      - Brightness (Slider)
-      - Frequency (Combobox)
-      - Relevance (Combobox)
-      - FOV (Slider)
-      - Vehicle Type (Combobox, minus 'vehicle.' prefix)
-      - Buttons (Remove, etc.)
-      - Tooltips for each setting
-    """
-    hud_number = len(hud_frames) + 1
-    frame = tk.Frame(scrollable_frame, bg="white", bd=2, relief="raised")
-
-    global header_entry
-    header_entry = tk.Entry(frame, width=20, font=('Helvetica', 14, 'bold'))
-    header_entry.insert(0, f"HUD {hud_number}")
-    header_entry.grid(row=0, column=0, pady=10, padx=10, sticky='n')
-
-    # Probability
-    label_prob = tk.Label(frame, text="HUD Probability: ", bg="white", font=('Helvetica', 11))
-    label_prob.grid(row=1, column=0, pady=5, padx=10, sticky='w')
-    
-    probability_var = tk.StringVar()
-    probability_entry = tk.Entry(frame, textvariable=probability_var, width=15, font=('Helvetica', 11))
-    validate_command = frame.register(lambda val: on_validate_input(val, probability_entry))
-    probability_entry.config(validate="key", validatecommand=(validate_command, "%P"))
-    probability_entry.insert(0, "1")
-    probability_entry.grid(row=1, column=1, pady=5, padx=10, sticky='w')
-
-    prob_tooltip = ToolTip(probability_entry, "Probability is set in fractions. Please only use integers > 0.")
-    prob_question_button = tk.Button(frame, text="?", command=prob_tooltip.show_tooltip, width=3)
-    prob_question_button.grid(row=1, column=2, padx=5)
-    prob_question_button.bind("<Enter>", lambda event, tooltip=prob_tooltip: tooltip.show_tooltip())
-    prob_question_button.bind("<Leave>", lambda event, tooltip=prob_tooltip: tooltip.hide_tooltip())
-
-    # Brightness
-    label_brightness = tk.Label(frame, text="HUD brightness: ", bg="white", font=('Helvetica', 11))
-    label_brightness.grid(row=2, column=0, pady=5, padx=10, sticky='w')
-
-    brightness_scale = tk.Scale(
-        frame,
-        from_=0.0,
-        to=0.9,
-        resolution=0.01,
-        orient=tk.HORIZONTAL,
-        length=150,
-        bg="white",
-        font=('Helvetica', 10),
-        tickinterval=0.3
-    )
-    brightness_scale.set(0.4)
-    brightness_scale.grid(row=2, column=1, pady=5, padx=10, sticky='ew')
-
-    brightness_tooltip = ToolTip(
-        brightness_scale, 
-        "Adjust how transparent the HUD is. 0.0 => fully opaque, 0.9 => almost invisible."
-    )
-    bright_question_button = tk.Button(frame, text="?", command=brightness_tooltip.show_tooltip, width=3)
-    bright_question_button.grid(row=2, column=2, padx=5)
-    bright_question_button.bind("<Enter>", lambda event, tooltip=brightness_tooltip: tooltip.show_tooltip())
-    bright_question_button.bind("<Leave>", lambda event, tooltip=brightness_tooltip: tooltip.hide_tooltip())
-
-    # Frequency
-    label_frequency = tk.Label(frame, text="Information frequency: ", bg="white", font=('Helvetica', 11))
-    label_frequency.grid(row=3, column=0, pady=5, padx=10, sticky='w')
-    
-    frequency_var = tk.StringVar(frame)
-    frequency_var.set(information_frequency[1])  # "average"
-    frequency_menu = ttk.Combobox(
-        frame, 
-        textvariable=frequency_var, 
-        values=information_frequency, 
-        state="readonly", 
-        font=('Helvetica', 11)
-    )
-    frequency_menu.current(1)
-    frequency_menu.grid(row=3, column=1, pady=5, padx=10, sticky='ew')
-
-    freq_tooltip = ToolTip(
-        frequency_menu, 
-        "Minimum: info only when needed, Maximum: info always displayed."
-    )
-    freq_question_button = tk.Button(frame, text="?", command=freq_tooltip.show_tooltip, width=3)
-    freq_question_button.grid(row=3, column=2, padx=5)
-    freq_question_button.bind("<Enter>", lambda event, tooltip=freq_tooltip: tooltip.show_tooltip())
-    freq_question_button.bind("<Leave>", lambda event, tooltip=freq_tooltip: tooltip.hide_tooltip())
-
-    # Relevance
-    label_relevance = tk.Label(frame, text="Information relevance: ", bg="white", font=('Helvetica', 11))
-    label_relevance.grid(row=4, column=0, pady=5, padx=10, sticky='w')
-    
-    relevance_var = tk.StringVar(frame)
-    relevance_var.set(information_relevance[1])  # "neutral"
-    relevance_menu = ttk.Combobox(
-        frame, 
-        textvariable=relevance_var, 
-        values=information_relevance, 
-        state="readonly", 
-        font=('Helvetica', 11)
-    )
-    relevance_menu.current(1)
-    relevance_menu.grid(row=4, column=1, pady=5, padx=10, sticky='ew')
-
-    relevance_tooltip = ToolTip(
-        relevance_menu, 
-        "'unimportant' => includes extra info (music, weather), 'important' => only essential driving info."
-    )
-    relevance_question_button = tk.Button(frame, text="?", command=relevance_tooltip.show_tooltip, width=3)
-    relevance_question_button.grid(row=4, column=2, padx=5)
-    relevance_question_button.bind("<Enter>", lambda event, tooltip=relevance_tooltip: tooltip.show_tooltip())
-    relevance_question_button.bind("<Leave>", lambda event, tooltip=relevance_tooltip: tooltip.hide_tooltip())
-
-    # FoV
-    label_fov = tk.Label(frame, text="Field of View: ", bg="white", font=('Helvetica', 11))
-    label_fov.grid(row=5, column=0, pady=5, padx=10, sticky='w')
-
-    fov_scale = tk.Scale(
-        frame,
-        from_=30,
-        to=100,
-        resolution=1,
-        orient=tk.HORIZONTAL,
-        length=150,
-        bg="white",
-        font=('Helvetica', 10),
-        tickinterval=20
-    )
-    fov_scale.set(60)
-    fov_scale.grid(row=5, column=1, pady=5, padx=10, sticky='ew')
-
-    fov_tooltip = ToolTip(
-        fov_scale, 
-        "Smaller FoV => info localized above steering wheel, Larger FoV => info spread across windshield."
-    )
-    fov_question_button = tk.Button(frame, text="?", command=fov_tooltip.show_tooltip, width=3)
-    fov_question_button.grid(row=5, column=2, padx=5)
-    fov_question_button.bind("<Enter>", lambda event, tooltip=fov_tooltip: tooltip.show_tooltip())
-    fov_question_button.bind("<Leave>", lambda event, tooltip=fov_tooltip: tooltip.hide_tooltip())
-
-    # Vehicle Type (no 'vehicle.' prefix in the UI)
-    label_vehicle_type = tk.Label(frame, text="Select vehicle type:", bg="white", font=('Helvetica', 11))
-    label_vehicle_type.grid(row=6, column=0, pady=5, padx=10, sticky='w')
-
-    max_width = max(len(option) for option in available_vehicle_types) + 2
-    vehicle_type = tk.StringVar(frame)
-    vehicle_type_menu = ttk.Combobox(
-        frame, 
-        textvariable=vehicle_type, 
-        values=available_vehicle_types, 
-        state="readonly", 
-        font=('Helvetica', 11)
-    )
-    vehicle_type_menu.current(0)
-    vehicle_type_menu.config(width=max_width)
-    vehicle_type_menu.grid(row=6, column=1, pady=5, padx=10, sticky='ew')
-
-    # Prepare final HUD dictionary
-    hud = {
-        'frame':         frame,
-        'HUDname':       header_entry,
-        'entry':         probability_entry,
-        'brightness_var': brightness_scale,
-        'frequency_var':  frequency_var,
-        'relevance_var':  relevance_var,
-        'fov_var':        fov_scale,
-        'vehicle_type':   vehicle_type,
-        'hud_id':         next_hud_id
-    }
-
-    remove_button = tk.Button(
-        frame, 
-        text="Remove HUD", 
-        command=lambda: remove_hud(hud.get("hud_id")),
-        bg="#ff6347", 
-        fg="white", 
-        width=15, 
-        font=('Helvetica', 12)
-    )
-    remove_button.grid(row=7, column=0, columnspan=3, pady=10)
-
-    return hud
 
 def close_window():
     root.quit()
 
-# ToolTip class to show the tooltip window
-class ToolTip:
-    def __init__(self, widget, text):
-        self.widget = widget
-        self.text = text
-        self.tooltip_window = None
-
-    def show_tooltip(self, event=None):
-        x, y, _, _ = self.widget.bbox("insert")
-        x += self.widget.winfo_rootx() + 50
-        y += self.widget.winfo_rooty() + 20
-
-        if self.tooltip_window:
-            self.tooltip_window.destroy()
-        self.tooltip_window = tk.Toplevel(self.widget)
-        self.tooltip_window.wm_overrideredirect(True)
-        self.tooltip_window.wm_geometry(f"+{x}+{y}")
-
-        label = tk.Label(
-            self.tooltip_window, 
-            text=self.text, 
-            justify='left',
-            background='#ffffe0', 
-            relief='solid', 
-            borderwidth=1,
-            wraplength=220
-        )
-        label.pack(ipadx=1)
-
-    def hide_tooltip(self, event=None):
-        if self.tooltip_window:
-            self.tooltip_window.destroy()
-            self.tooltip_window = None
-
-selected_map_index = None
-def on_map_select(event):
-    global selected_map_index
-    selected_index = map_list.curselection()
-    if selected_index:
-        selected_map_index = selected_index[0]
-
-def reselect_map():
-    if selected_map_index is not None:
-        map_list.selection_clear(0, tk.END)
-        map_list.selection_set(selected_map_index)
-        map_list.activate(selected_map_index)
-
 root = tk.Tk()
 root.title("SUMO Simulation Launcher")
-
-window_width = 800
-window_height = 800
-screen_width = root.winfo_screenwidth()
-screen_height = root.winfo_screenheight()
-x_coordinate = (screen_width - window_width) // 2
-y_coordinate = (screen_height - window_height) // 2
-root.geometry(f"{window_width}x{window_height}+{x_coordinate}+{y_coordinate}")
+root.geometry("800x800")
 
 notebook = ttk.Notebook(root)
 notebook.pack(expand=True, fill="both")
 
+# ======================= MAIN TAB ========================
 main_tab = ttk.Frame(notebook)
 notebook.add(main_tab, text="Main")
 
+main_canvas = tk.Canvas(main_tab, bg="#f0f0f0", highlightthickness=0)
+main_scroll = ttk.Scrollbar(main_tab, orient="vertical", command=main_canvas.yview)
+main_frame = tk.Frame(main_canvas, bg="#f0f0f0")
+
+def main_configure(e):
+    main_canvas.configure(scrollregion=main_canvas.bbox("all"))
+
+main_frame.bind("<Configure>", main_configure)
+main_canvas.create_window((0,0), window=main_frame, anchor="nw")
+main_canvas.configure(yscrollcommand=main_scroll.set)
+main_canvas.pack(side="left", fill="both", expand=True)
+main_scroll.pack(side="right", fill="y")
+
+# top area (centered)
+top_controls_frame = tk.Frame(main_frame, bg="#f0f0f0")
+top_controls_frame.grid(row=0, column=0, pady=10, sticky="n")
+
+map_label = tk.Label(top_controls_frame, text="Select a map:", font=("Helvetica", 14, "bold"), bg="#f0f0f0")
+map_label.pack(pady=(0,5))
+
+map_list = tk.Listbox(top_controls_frame, font=("Helvetica", 12), height=5, width=15)
+for m in maps:
+    map_list.insert(tk.END, m)
+map_list.pack(pady=5)
+
+selected_map_index = None
+def on_map_select(event):
+    global selected_map_index
+    sel = map_list.curselection()
+    if sel:
+        selected_map_index = sel[0]
+map_list.bind('<<ListboxSelect>>', on_map_select)
+
+simulate_var = tk.BooleanVar()
+simulate_cb = tk.Checkbutton(
+    top_controls_frame,
+    text="Start co-Simulation with CARLA",
+    variable=simulate_var,
+    font=("Helvetica", 12),
+    bg="#f0f0f0"
+)
+simulate_cb.pack(pady=5)
+
+spectate_var = tk.BooleanVar()
+spectate_cb = tk.Checkbutton(
+    top_controls_frame,
+    text="Start the CARLA first-person spectator client",
+    variable=spectate_var,
+    font=("Helvetica", 12),
+    bg="#f0f0f0"
+)
+spectate_cb.pack(pady=5)
+
+hudless_var = tk.BooleanVar()
+hudless_cb = tk.Checkbutton(
+    top_controls_frame,
+    text="Simulate a car that is not using a HUD.\n(HUD probability=5)",
+    variable=hudless_var,
+    font=("Helvetica", 12),
+    bg="#f0f0f0"
+)
+hudless_cb.pack(pady=5)
+
+# below that: row=1 => hud_list_frame + buttons_frame
+hud_list_frame = tk.Frame(main_frame, bg="white", bd=2, relief="sunken")
+hud_list_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+
+buttons_frame = tk.Frame(main_frame, bg="#f0f0f0")
+buttons_frame.grid(row=1, column=1, padx=10, pady=10, sticky="n")
+
+btn_add_hud = tk.Button(buttons_frame, text="Add HUD", command=add_hud,
+                        bg="#4682b4", fg="white", width=15, font=("Helvetica", 10))
+btn_add_hud.pack(pady=5)
+
+btn_start = tk.Button(buttons_frame, text="Start simulation", command=start_simulation,
+                      bg="#32cd32", fg="white", width=15, font=("Helvetica", 10))
+btn_start.pack(pady=5)
+
+btn_close = tk.Button(buttons_frame, text="Close", command=close_window,
+                      bg="#a9a9a9", fg="white", width=15, font=("Helvetica", 10))
+btn_close.pack(pady=5)
+
+# ======================= SETTINGS TAB =====================
 settings_tab = ttk.Frame(notebook)
 notebook.add(settings_tab, text="Settings")
 
-canvas = tk.Canvas(settings_tab, bg="white")
-scrollbar = ttk.Scrollbar(settings_tab, orient="vertical", command=canvas.yview)
-scrollable_frame = ttk.Frame(canvas, bg="white")
+set_canvas = tk.Canvas(settings_tab, bg="white", highlightthickness=0)
+set_scroll = ttk.Scrollbar(settings_tab, orient="vertical", command=set_canvas.yview)
+set_frame = tk.Frame(set_canvas, bg="white")
 
-scrollable_frame.bind(
-    "<Configure>",
-    lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+def set_configure(e):
+    set_canvas.configure(scrollregion=set_canvas.bbox("all"))
+
+set_frame.bind("<Configure>", set_configure)
+set_canvas.create_window((0,0), window=set_frame, anchor="nw")
+set_canvas.configure(yscrollcommand=set_scroll.set)
+set_canvas.pack(side="left", fill="both", expand=True)
+set_scroll.pack(side="right", fill="y")
+
+intro_label = tk.Label(
+    set_frame,
+    text="Here you can enable or disable which data is saved to the CSV.",
+    font=("Arial", 12), bg="white"
 )
-
-canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-canvas.configure(yscrollcommand=scrollbar.set)
-
-def on_mouse_wheel(event):
-    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-canvas.bind("<MouseWheel>", on_mouse_wheel)
-canvas.pack(side="left", fill="both", expand=True)
-scrollbar.pack(side="right", fill="y")
-
-header_label = tk.Label(
-    scrollable_frame, 
-    text=(
-        "This is the settings page. Here you can enable and disable which data "
-        "will be saved into the .csv during the simulation. By default all options are enabled."
-    ),
-    font=("Arial", 12),
-    bg="white"
-)
-header_label.grid(row=0, column=0, columnspan=2, padx=80, pady=5, sticky="we")
+intro_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
 
 checkbox_texts = [
     "Enable saving the map name:",
@@ -939,101 +919,55 @@ checkbox_texts = [
     "Enable saving the selected FoV:"
 ]
 
-checkbox_vars = []
-for i, text in enumerate(checkbox_texts):
-    label = ttk.Label(scrollable_frame, text=text, background="white")
-    label.grid(row=i + 1, column=0, padx=10, pady=5, sticky="e")
-    checkbox_var = tk.BooleanVar(value=True)
-    checkbox = ttk.Checkbutton(scrollable_frame, variable=checkbox_var)
-    checkbox.grid(row=i + 1, column=1, pady=5, sticky="w")
-    checkbox_vars.append(checkbox_var)
+for i, text in enumerate(checkbox_texts, start=1):
+    lbl = tk.Label(set_frame, text=text, bg="white", font=("Helvetica", 10))
+    lbl.grid(row=i, column=0, padx=10, pady=5, sticky="w")
+    var = tk.BooleanVar(value=True)
+    cb = ttk.Checkbutton(set_frame, variable=var)
+    cb.grid(row=i, column=1, padx=5, pady=5, sticky="w")
+    checkbox_vars.append(var)
 
-scrollable_frame.update_idletasks()
-canvas.configure(scrollregion=canvas.bbox("all"))
-
+# ======================== HELP TAB ========================
 help_tab = ttk.Frame(notebook)
 notebook.add(help_tab, text="Help")
-# Omitted for brevity
 
-simulate_var = tk.BooleanVar()
-simulate_var.set(False)
-spectate_var = tk.BooleanVar()
-spectate_var.set(False)
-hudless_var = tk.BooleanVar()
-hudless_var.set(False)
+help_canvas = tk.Canvas(help_tab, bg="white", highlightthickness=0)
+help_scroll = ttk.Scrollbar(help_tab, orient="vertical", command=help_canvas.yview)
+help_frame = tk.Frame(help_canvas, bg="white")
 
-map_label = tk.Label(main_tab, text="Select a map:", font=('Helvetica', 14, 'bold'))
-map_label.pack(pady=5)
+def help_configure(e):
+    help_canvas.configure(scrollregion=help_canvas.bbox("all"))
 
-map_list = tk.Listbox(main_tab, font=('Helvetica', 12), height=5, width=10)
-for map_name in maps:
-    map_list.insert(tk.END, map_name)
-map_list.pack(pady=10)
-map_list.bind('<<ListboxSelect>>', on_map_select)
+help_frame.bind("<Configure>", help_configure)
+help_canvas.create_window((0,0), window=help_frame, anchor="nw")
+help_canvas.configure(yscrollcommand=help_scroll.set)
+help_canvas.pack(side="left", fill="both", expand=True)
+help_scroll.pack(side="right", fill="y")
 
-simulate_checkbox = tk.Checkbutton(main_tab, text="Start co-Simulation with CARLA", variable=simulate_var, font=('Helvetica', 12))
-simulate_checkbox.pack()
-
-spectator_checkbox = tk.Checkbutton(main_tab, text="Start the CARLA first-person spectator client", variable=spectate_var, font=('Helvetica', 12))
-spectator_checkbox.pack()
-
-hudless_checkbox = tk.Checkbutton(
-    main_tab, 
-    text="Simulate a car that is not using a HUD.\nThe HUD probability is always 5.", 
-    variable=hudless_var, 
-    font=('Helvetica', 12)
+help_text = tk.Label(
+    help_frame,
+    text=(
+        "HELP PAGE\n\n"
+        "1. Use 'Add HUD' to create new HUD configurations.\n"
+        "2. Adjust brightness and FoV via sliders (the current value is shown).\n"
+        "3. Probability sets how often that HUD is chosen.\n"
+        "4. Frequency and relevance control how/when info is displayed.\n"
+        "5. Start the simulation via 'Start simulation' on the main page.\n"
+        "6. Use the 'Settings' tab to control what data is saved.\n"
+        "Scroll if content is large."
+    ),
+    bg="white",
+    font=("Helvetica", 12),
+    wraplength=600,
+    justify="left"
 )
-hudless_checkbox.pack()
+help_text.pack(padx=10, pady=10, anchor="nw")
 
-canvas2 = tk.Canvas(main_tab, bg="#f0f0f0")
-scrollbar2 = tk.Scrollbar(main_tab, orient="vertical", command=canvas2.yview)
-scrollable_frame2 = tk.Frame(canvas2, bg="#f0f0f0")
-
-canvas2.create_window((0, 0), window=scrollable_frame2, anchor="nw")
-canvas2.configure(yscrollcommand=scrollbar2.set)
-
-canvas2.bind_all("<MouseWheel>", lambda event: canvas2.yview_scroll(int(-1 * (event.delta / 120)), "units"))
-
-canvas2.pack(side="left", fill="both", expand=True)
-scrollbar2.pack(side="right", fill="y")
-
-hud_frames = []
-
+# Optionally create some default HUDs
 def create_default_huds():
-    for _ in range(3):
+    for _ in range(2):
         add_hud()
 
-button_frame = tk.Frame(main_tab, bg="#f0f0f0")
-button_frame.pack(pady=10)
-
-button_width = 20
-button_height = 2
-
-add_hud_button = tk.Button(button_frame, text="Add HUD", command=add_hud, bg="#4682b4", fg="white", width=button_width, height=button_height, font=('Helvetica', 10))
-add_hud_button.pack(pady=10)
-
-start_button = tk.Button(button_frame, text="Start simulation", command=start_simulation, bg="#32cd32", fg="white", width=button_width, height=button_height, font=('Helvetica', 10))
-start_button.pack(pady=10)
-
-close_button = tk.Button(button_frame, text="Close", command=close_window, bg="#a9a9a9", fg="white", width=button_width, height=button_height, font=('Helvetica', 10))
-close_button.pack(pady=10, padx=10)
-
-scrollable_frame.unbind_class("TCombobox", "<MouseWheel>")
-
-def dontscroll(e):
-    return "dontscroll"
-
-def on_enter(e):
-    scrollable_frame.bind_all("<MouseWheel>", dontscroll)
-
-def _on_mouse_wheel2(event):
-    canvas2.yview_scroll(-1 * int((event.delta / 120)), "units")
-
-def on_leave(e):
-    scrollable_frame.bind_all("<MouseWheel>", _on_mouse_wheel2)
-
-scrollable_frame.bind_class('Listbox', '<Enter>', on_enter)
-scrollable_frame.bind_class('Listbox', '<Leave>', on_leave)
-
 create_default_huds()
+
 root.mainloop()
