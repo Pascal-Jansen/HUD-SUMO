@@ -99,8 +99,13 @@ def run_simulation(map):
         min_gap = data.get("min_Gap")
         min_gap_mapping[vehicle_type] = min_gap
 
+    now = datetime.now()
+    timestamp = now.strftime("%H-%M-%S_%Y-%m-%d")
+
+    fcd_filename = f'Simulation_data/{map}_{timestamp}_fcd_data.xml'
+
     path = os.path.join(sumo_base_dir, "examples", map + ".sumocfg")
-    traci.start(["sumo", "-c", path])
+    traci.start(["sumo", "-c", path, '--fcd-output', fcd_filename])
 
     simulation_data = []
 
@@ -135,9 +140,9 @@ def run_simulation(map):
             traci.vehicle.setMinGap(vehicle_id, new_min_gap)
 
     traci.close()
-    save_simulation_data(simulation_data, map)
+    save_simulation_data(simulation_data, map, timestamp)
 
-def save_simulation_data(simulation_data, map):
+def save_simulation_data(simulation_data, map, timestamp):
     """
     Function that checks which boxes on the setting tab are checked, 
     then saves relevant data to .csv.
