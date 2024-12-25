@@ -16,7 +16,7 @@ We always tried to make factors (calculations, values, etc) impacting the drivin
 
 
 ## Frameworks and Libraries
-* Sumo (Version 1.20)
+* Sumo (Version 1.21 or higher)
   * traci (python package)
   * sumolib (python package)
 * CARLA (Version 0.9.15)
@@ -35,11 +35,11 @@ Generally, we try to use the latest version of each package und Framework to imp
 
 ### Requirements / Pre-installation
 * [Python 3.10](https://www.python.org/downloads/)
-* [Sumo 1.20](https://sumo.dlr.de/docs/Downloads.php)
-* [Carla 0.9.15](https://carla.readthedocs.io/en/0.9.15/download/)
+* [Sumo 1.21](https://sumo.dlr.de/docs/Downloads.php)
+* [Carla 0.9.15](https://carla.readthedocs.io/en/0.9.15/download/) - both the Server and Client 
 
 ### Setup
-1. Make sure that all requirements are installed and the PATH variable is correctly set.
+1. Ensure all requirements are installed and the PATH variable is correctly set.
 2. Clone this repository to a location of your choice.
 3. Install python packages using pip.
 
@@ -51,30 +51,30 @@ pip install -r .\requirements.txt
 5. Copy content of setup_files into the Carla folder (copy the WindowsNoEditor folder over the one from carla, merge/ overwrite if promted)
 
 ### Update .rou files
-* For the simulation to work you need to update the .rou.xml files in your CarlaBaseDir/Co-Simulation/Sumo/examples/rou folder.
-* You can either use the files provided with this project or create your own files using randomTrips.py.
+* For the simulation to work, you need to update the .rou.xml files in your CarlaBaseDir/Co-Simulation/Sumo/examples/rou folder.
+* You can use the files provided with this project or create your files using `randomTrips.py`.
 * You can find the method in the /tools folder in your SUMO installation.
 
 ```
 python randomTrips.py -n "CarlaBaseDir/Co-Simulation/Sumo/examples/net/TownXX.net.xml" -e 7200 --route-file "CarlaBaseDir/Co-Simulation/Sumo/examples/rou/Townxx.rou.xml" --period 6 --validate 
 ```
-* Using this command you will get the appropriate .rou file for the simulation. 
+* Using this command, you will get the appropriate .rou file for the simulation. 
 * You can change the duration of your simulation by setting the -e to a different value.
 * Please make sure to also set  --period <FLOAT> (default 1) to your prefered value. 
-  Note: Setting --period too low will cause the simulation to become overflooded which prevents the simulation from running correctly. You can avoid this by choosing a higher --period value.
+  Note: Setting a period too low will cause the simulation to become overflooded, which prevents it from running correctly. You can avoid this by choosing a higher --period value.
 
 ### Running the Software
 1. Run main.py to access the GUI ("python main.py")
 2. In the GUI, select which components u want to run.
-    1. choose a map for the simulation from the list
-    2. select whether you want the co-simulation with CARLA, run the first-person spectator client and whether you want a vehicle without a HUD (a baseline vehicle). If you select the first-person spectator client without the CARLA option, a silent CARLA server will start in the background.
+    1. Choose a map for the simulation from the list
+    2. Select whether you want the co-simulation with CARLA, run the first-person spectator client, and decide whether you want a vehicle without a HUD (a baseline vehicle). If you select the first-person spectator client without the CARLA option, a silent CARLA server will start in the background.
     3. Add or remove HUD configurations until you have the desired number.
     4. configure and adjust the probability and name of all HUD configurations
     * If you want to run the spectator client at a later point, make sure you have selected the co-simulation with Carla option and run spectator.py
-3. click start Simulation. SUMO and other selected components will open for a visual simulation. Simultaneously TRaCI will run the simulation in the background and collect all data.
+3. Click `Start Simulation`. SUMO and other selected components will open for a visual simulation. Simultaneously, TRaCI will run the simulation in the background and collect all data.
 4. The simulation results will be saved to the folder [Simulation_data](./Simulation_data)
 
-You can start the next simulation without having to restart the project. Just make sure to close all running SUMO and CARLA processes before starting a new simulation. Sometimes a CARLA thread doesn't close properly and idles in the background which causes problems when trying to start a new simulation. If you have issues starting a new simulation check the task manager and close all running CARLA threads.
+You can start the next simulation without having to restart the project. Simply close all running SUMO and CARLA processes before starting a new simulation. Sometimes, a CARLA thread does not close properly and idles in the background, which causes problems when trying to start a new simulation. If you have issues starting a new simulation, check the task manager and close all running CARLA threads.
 
 ![GUI with main tab](/screenshots/GUI_main.PNG)
 
@@ -86,8 +86,8 @@ You can start the next simulation without having to restart the project. Just ma
 
 ### Configurations
 
-After opening the GUI you can navigate to the settings tab. Here you can select which simulation data you would like to save in your .csv file.
-Note that by default all the data is selected. Every time you restart the GUI you have the manually deselect options you don't want to save.
+After opening the GUI, you can navigate to the settings tab. Her,e you can select which simulation data you want to save in your `.csv` file.
+Note that by default, all the data is selected. Whenever you restart the GUI you have the manually deselect options you don't want to save.
 
 These are the options:
 * map: the map that was being used for the simulation
@@ -150,16 +150,18 @@ Note that you are not able to deselect the hud_id.
 ## Limitations
 There are several limitations to this project:
 
-* Options used to simulate the AR HUDs are very limited. To allow a more accurate simulation it would be necessary to differentiate more, maybe even allow the costumisation of the different HUD elements.
-* The created formulae, base values and weights used to simulate the driving performance with the use of AR HUDs are based on data from the linked research. However the accuracy of the simulation results can be decreased if the data is imprecisely or scarce regarding certain factors. We tried to use as much data as possible but some calculations are educated guesses.
-* The number of HUDs that is being simulated at the same time is limited to the amount of available vehicle types (vTypes) in CARLA since the different HUDs are being mapped to the vTypes. Currently we are enabling simulating eleven HUDs at the same time.
-* CARLA has rather large requirements for self-compiling that made it not feasible for us to modify CARLA directly. Therefore, we were forced to use a pre-compiled version of CARLA that works good in itself, but imposes restrictions on the overall project.
-* The SUMO integration into CARLA is usable to show the state of vehicles in an 3D environment, but making use of the plethora of sensors and tools that CARLA can provide was not possible. The vehicle data is transferred in a way of SUMO providing the location of every vehicle at every given time to CARLA, meaning the sensors only see the vehicle projection with no access to the simulation data itself.
-* The spectator client is limited in information that it receives because the CARLA sensors don't work properly. Therefore, the visualization is a lot less dynamic than it could have been. The spectator client is pretty much limited to the vehicle speed as an dynamic item in the HUD.
-* While SUMO and CARLA synchronize the vehicles pretty well, there are consistency and synchronization errors between SUMO and CARLA regarding the world, for example traffic lights are not in sync and roadsigns don't necessarily match.
-* There is no proper way to export maps from SUMO to CARLA, as CARLA maps require extensive 3D modelling of the complete map.This limited us to the maps that are provided by CARLA.
+* Options used to simulate the AR HUDs are very limited. To allow a more accurate simulation, it would be necessary to differentiate more, maybe even allow the customisation of the different HUD elements.
+* The created formulae, base values and weights used to simulate the driving performance using AR HUDs are based on data from the linked research. However, the accuracy of the simulation results can be decreased if the data is imprecise or scarce regarding certain factors. We tried to use as much data as possible, but some calculations are educated guesses.
+* The number of HUDs simulated simultaneously is limited to the number of available vehicle types (`vTypes`) in CARLA since the different HUDs are mapped to the vTypes. Currently, we are enabling the simultaneous simulation of eleven HUDs.
+* CARLA has rather large requirements for self-compiling, which makes it not feasible for us to modify CARLA directly. Therefore, we were forced to use a pre-compiled version of CARLA that works well but imposes restrictions on the overall project.
+* The SUMO integration into CARLA is usable to show the state of vehicles in a 3D environment, but using the plethora of sensors and tools that CARLA can provide was impossible. The vehicle data is transferred so that SUMO provides the location of every vehicle at every given time to CARLA, meaning the sensors only see the vehicle projection with no access to the simulation data itself.
+* The spectator client is limited in the information that it receives because the CARLA sensors don't work properly. Therefore, the visualization is much less dynamic than it could have been. The spectator client is limited to the vehicle speed as a dynamic item in the HUD.
+* While SUMO and CARLA synchronize the vehicles pretty well, there are consistency and synchronization errors between SUMO and CARLA regarding the world. For example, traffic lights are not in sync, and roadsigns do not necessarily match.
+* There is no proper way to export maps from SUMO to CARLA, as CARLA maps require extensive 3D modeling of the complete map. This limited us to the maps that CARLA provides.
 
+## Future Upgrade to Carla with UE 5.5
+Currently (December 2024), Carla 0.10.0 is released but does not [yet support co-simulation with SUMO](https://carla.org/2024/12/19/release-0.10.0/). We plan to support this in the future.
 
-#### Icon source:
+#### Icon source
 
 * https://www.svgrepo.com/collection/essential-set-2/
