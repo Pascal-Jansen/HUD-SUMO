@@ -121,8 +121,10 @@ Note that you are not able to deselect the hud_id.
 
 ## Files overview:
         Apse-Extension-for-Carla-and-Sumo
+        |---analysis : Folder that contains R code for basic descriptive and inferential analysis of the log data
         |---icons : Folder that contains the Icons used as HUD elements in the spectator client 
         |    |---12 icon image files
+        |---sample_data : Folder that contains sample data logs of a simulation with 5 HUDs in Town01
         |---screenshots : Folder that contains screenshots from the components for use in the docs and help page
         |    |---13 screenshots
         |---setup_files : Folder that contains the path and the files that need to be updated within Carla for the program to run
